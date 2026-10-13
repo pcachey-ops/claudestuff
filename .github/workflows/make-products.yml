@@ -1,0 +1,65 @@
+name: Make digital products
+
+on:
+  schedule:
+    - cron: "17 14 * * 1,4"   # Mondays and Thursdays, 14:17 UTC
+  workflow_dispatch:
+    inputs:
+      count:
+        description: Products to make
+        default: "2"
+      publish:
+        description: "Targets: shopify,etsy (blank = generate only)"
+        default: "shopify,etsy"
+      activate:
+        description: List as live instead of draft
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency: make-products
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: sudo apt-get install -y fonts-dejavu-core
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
+
+      - name: Generate and publish
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_ADMIN_TOKEN: ${{ secrets.SHOPIFY_ADMIN_TOKEN }}
+          ETSY_KEYSTRING: ${{ secrets.ETSY_KEYSTRING }}
+          ETSY_SHARED_SECRET: ${{ secrets.ETSY_SHARED_SECRET }}
+          ETSY_REFRESH_TOKEN: ${{ secrets.ETSY_REFRESH_TOKEN }}
+          ETSY_SHOP_ID: ${{ secrets.ETSY_SHOP_ID }}
+          ETSY_TAXONOMY_ID: ${{ vars.ETSY_TAXONOMY_ID }}
+          PRODUCT_NICHES: ${{ vars.PRODUCT_NICHES }}
+          COUNT: ${{ inputs.count || vars.PRODUCTS_PER_RUN || '2' }}
+          PUBLISH_INPUT: ${{ inputs.publish }}
+          PUBLISH_DEFAULT: ${{ vars.PUBLISH_TARGETS }}
+          ACTIVATE: ${{ inputs.activate }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then publish="$PUBLISH_INPUT"; else publish="$PUBLISH_DEFAULT"; fi
+          extra=""
+          if [ "$ACTIVATE" = "true" ]; then extra="--activate"; fi
+          python -m product_pipeline --count "$COUNT" --publish "$publish" $extra
+
+      - name: Commit catalog
+        if: success() || failure()
+        run: |
+          git config user.name "product-bot"
+          git config user.email "product-bot@users.noreply.github.com"
+          git add -A catalog output
+          git diff --cached --quiet || git commit -m "Add generated products ($(date -u +%F))"
+          git push
